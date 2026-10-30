@@ -75,7 +75,7 @@ class CollectTests(TestCase):
         self.assertIsNone(spot.visit_minutes)
         self.assertEqual(spot.ticket_source_url, "")
         self.assertEqual(spot.amap_record.average_cost, Decimal("50.00"))
-        self.assertContains(self.client.get("/?city=杭州市"), "西湖风景名胜区")
+        self.assertContains(self.client.get("/explore/?city=杭州市"), "西湖风景名胜区")
 
     def test_repeat_update_preserves_manual_fields(self):
         spot = Attraction.objects.create(name=POI["name"], city="杭州", description="手工介绍", ticket_price=60, visit_minutes=180,
@@ -132,12 +132,12 @@ class CollectTests(TestCase):
         for index in range(14):
             Attraction.objects.create(name=f"公园{index}", city="杭州", tag="公园")
         Attraction.objects.create(name="外地公园", city="北京", tag="公园")
-        response = self.client.get("/?city=杭州市&tag=公园&sort=rating")
+        response = self.client.get("/explore/?city=杭州市&tag=公园&sort=rating")
         self.assertEqual(response.context["result_count"], 14)
         self.assertEqual(len(response.context["spots"]), 12)
         self.assertNotContains(response, "外地公园")
-        self.assertEqual(len(self.client.get("/?city=杭州&page=2").context["spots"]), 2)
-        self.assertContains(self.client.get("/?city=不存在"), "暂时没有匹配的景点")
+        self.assertEqual(len(self.client.get("/explore/?city=杭州&page=2").context["spots"]), 2)
+        self.assertContains(self.client.get("/explore/?city=不存在"), "暂时没有匹配的景点")
 
     def test_source_text_escaped_and_duration_validated(self):
         spot = Attraction(name="安全测试", city="北京", ticket_notes="<script>bad</script>", visit_minutes=0)

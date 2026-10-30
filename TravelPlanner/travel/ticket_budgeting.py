@@ -81,7 +81,10 @@ def options_for(record,target):
     for r in record['rows']:
         if not r.get('usable') or not r.get('unit'):continue
         raw=r['raw'];scenic=normalize_name(raw.get('scenicName',''))
-        if scenic and not (name==scenic or (len(name)>=3 and (name in scenic or scenic in name))):continue
-        if any(w in r['name'] for w in ['夜场','下午场','下午票','半日','年卡','次卡','学生','老人','优待','长者','早鸟','夜游']):continue
+        # Missing scenic identity is not evidence that an unrelated cheap product belongs here.
+        if not scenic or not (name==scenic or (min(len(name),len(scenic))>=3 and (name in scenic or scenic in name))):continue
+        city=str(raw.get('cityName') or '').removesuffix('市')
+        if city and city!=str(target.get('city','')).removesuffix('市'):continue
+        if any(w in r['name'] for w in ['夜场','下午场','下午票','半日','年卡','次卡','学生','老人','优待','长者','早鸟','夜游','自助餐','餐饮','酒店','住宿','套票','联票']):continue
         valid.append(r)
     return valid

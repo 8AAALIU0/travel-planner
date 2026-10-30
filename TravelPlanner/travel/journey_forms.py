@@ -35,6 +35,9 @@ class JourneyForm(PlannerForm,TransportPreferenceForm,StayPreferenceForm):
     ticket_policy=forms.ChoiceField(label='门票预算怎样计算',required=False,choices=[('auto','自动参考资料，未知景点按类别估算'),('manual','未知景点使用我填写的单人预留')],initial='auto')
     def clean_ticket_policy(self):return self.cleaned_data.get('ticket_policy') or 'auto'
 
+    budget_strategy=forms.ChoiceField(label='剩余预算怎样使用',required=False,choices=[('experience','体验优先 · 相近品质下充分使用预算'),('quality','品质优先 · 同等体验少花钱')],initial='experience',help_text='先满足时间、预算和游玩目标；体验优先允许在当前最佳评分3%范围内比较有来源票价的景点。未知估价不会被当作升级。')
+    def clean_budget_strategy(self):return self.cleaned_data.get('budget_strategy') or 'experience'
+
     fallback_return = forms.DecimalField(label='未查到报价时，每位成人往返交通预留', min_value=1,max_value=100000,decimal_places=2,max_digits=8,initial=600)
 
     def __init__(self,*a,**kw):
@@ -51,7 +54,7 @@ class JourneyForm(PlannerForm,TransportPreferenceForm,StayPreferenceForm):
         self.fields['budget'].initial=5000
         self.fields['start_date'].initial=lambda:timezone.localdate()+timedelta(days=2)
         self.fields['days'].label='出发到返回，一共几天'
-        self.order_fields(['origin','city','start_date','days','people','budget','keywords','stay_kind','hotel_preference','stay_area','travel_kind','travel_priority','pace','mode','minimum_sights','minimum_play_days','allow_overnight','seat_preference','max_travel_hours','transport_budget_pct','rooms','nights','hotel','food','transport','unknown_ticket','fallback_return'])
+        self.order_fields(['origin','city','start_date','days','people','budget','budget_strategy','keywords','stay_kind','hotel_preference','stay_area','travel_kind','travel_priority','pace','mode','minimum_sights','minimum_play_days','allow_overnight','seat_preference','max_travel_hours','transport_budget_pct','rooms','nights','hotel','food','transport','unknown_ticket','fallback_return'])
         self.fields['hotel'].required=False
         self.fields['rooms'].required=False
         self.fields['nights'].help_text='留空按实际抵达、返程日期计算；填写后使用手动晚数，需核对交通日期。'

@@ -45,7 +45,7 @@ def journey(request):
     from .presentation import present_job
     job=present_job(item.payload) if item else None
     return render(request,'travel/journey.html',{'form':form,'job':job,'plan':job.get('plan') if job and job.get('done') else None,
-        'stages':STAGES,'main_fields':['origin','city','start_date','days','people','budget','keywords','stay_kind','hotel_preference','stay_area','travel_kind','travel_priority','pace','mode'],
+        'stages':STAGES,'main_fields':['origin','city','start_date','days','people','budget','budget_strategy','keywords','stay_kind','hotel_preference','stay_area','travel_kind','travel_priority','pace','mode'],
         'transport_form':TransportPreferenceForm(initial=job.get('input',{}) if job else {},prefix='transport'),'extra_fields':['ticket_policy','minimum_sights','minimum_play_days','allow_overnight','seat_preference','max_travel_hours','transport_budget_pct','rooms','nights','hotel','food','transport','unknown_ticket','fallback_return']})
 
 

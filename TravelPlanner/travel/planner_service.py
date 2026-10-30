@@ -205,6 +205,7 @@ def day_window(p, index):
     return start,end
 
 
+@step_memo
 def build_plan(p, key):
     people, count = p["people"], p["days"]
     nights = p.get("nights") if p.get("nights") is not None else count-1
@@ -258,5 +259,11 @@ def build_plan(p, key):
         result["warnings"].append("部分景点间交通未核验，仅作粗估；请点击高德路线链接核对后再出发。")
     if not stops:
         result["warnings"].append("未找到满足当前条件的安排。请调整兴趣、预算或交通方式后重新生成。")
+    usable=p['budget']-reserve
+    result['budget_use']={'spend_limit':str(usable),'planned':str(total-reserve),
+        'percent':str(((total-reserve)/usable*100).quantize(Decimal('.1'))) if usable>0 else '0',
+        'unallocated':str(max(Decimal(0),p['budget']-total)),
+        'strategy':'相近品质下充分使用预算' if p.get('budget_strategy')=='experience' else '品质优先',
+        'note':'预算占用包含住宿、餐饮、交通与未知票价预留，不等于已核实支出。剩余金额未强行计入费用；可调整住宿/餐饮标准或游玩天数后重新比较。'}
     result["warnings"]=list(dict.fromkeys(result["warnings"]))
     return result

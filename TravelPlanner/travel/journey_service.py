@@ -17,6 +17,7 @@ def restore(data):
     p['start_date']=date.fromisoformat(p['start_date'])
     for field in ('budget','hotel','food','transport','unknown_ticket','fallback_return','intercity'):
         if field in p:p[field]=Decimal(str(p[field]))
+    p.setdefault('budget_strategy','experience')
     p.setdefault('interests',['nature','culture'])
     p['hotel_total']=None
     from .stay_policy import apply_stay
@@ -89,9 +90,20 @@ def ticket_stage(job,p,key,stage):
     if field not in job:
         draft=build_plan(final_parameters(job,p),key)
         checked=set(job.get('ticket_checked',[]))
-        job[field]=[{'name':s['name'],'date':d['date'],'city':p['city']} for d in draft.get('days',[]) for s in d['stops'] if s['name']+'|'+d['date'] not in checked][:15]
+        if stage==5:
+            # A connection interruption is not a permanent 'no ticket' result.
+            # At most one second-pass attempt per target; cached results remain usable.
+            for token in job.get('ticket_failed',[]):
+                if job.get('ticket_attempts',{}).get(token,0)<2:checked.discard(token)
+        targets=[{'name':s['name'],'date':d['date'],'city':p['city']} for d in draft.get('days',[]) for s in d['stops'] if s['name']+'|'+d['date'] not in checked]
+        counted=set(job.get('ticket_checked',[]));queue=[]
+        for target in targets:
+            token=target['name']+'|'+target['date']
+            if token not in counted and len(counted)>=15:continue
+            if token not in {x['name']+'|'+x['date'] for x in queue}:queue.append(target);counted.add(token)
+        job[field]=queue
     queue=job[field]
-    if len(job.get('ticket_checked',[]))>=15:return True,'本轮已处理15个景点日期，其他项目明确使用估算。'
+    if len(set(job.get('ticket_checked',[])))>=15 and stage==4:return True,'本轮已处理15个景点日期，其他项目明确使用估算。'
     if not queue:return True,'当前安排的景点票价已处理；未查到的项目保留分类估算。'
     target=queue.pop(0);token=target['name']+'|'+target['date'];message=''
     ref=official(target,date.fromisoformat(target['date']))
@@ -103,11 +115,14 @@ def ticket_stage(job,p,key,stage):
     elif job.get('ticket_queries_paused'):message=target['name']+'：平台查询暂不可用，明确使用分类估算。'
     else:
         try:
+            attempts=job.setdefault('ticket_attempts',{})
+            attempts[token]=attempts.get(token,0)+1
             record=query('ticket',{'scenic_name':target['name'],'depart_date':target['date']})
             rows=options_for(record,target)
             options=[{'name':r['name'],'unit':r['unit'],'info':r['info']} for r in rows][:4]
             job.setdefault('ticket_options',[]).append({**target,'options':options,'queried_at':record['queried_at']})
             if rows:
+                job['ticket_failed']=[x for x in job.get('ticket_failed',[]) if x!=token]
                 # 优先普通单票，避免将餐饮/住宿套票当成景区单门票。
                 plain=[r for r in rows if not any(w in r['name'] for w in ['自助餐','餐饮','酒店','住宿','套票','联票'])]
                 selected=min(plain or rows,key=lambda r:Decimal(r['unit']))
@@ -117,10 +132,13 @@ def ticket_stage(job,p,key,stage):
             else:message=target['name']+'：未取得匹配日期和身份的成人票，使用分类估算。'
         except QuoteError as exc:
             message=target['name']+'：'+str(exc)+'；使用分类估算。'
-            if any(w in str(exc) for w in ['密钥','额度','频率','权限','429','错误码 101','连接暂不可用','平台查询超时']):job['ticket_queries_paused']=True
+            if token not in job.setdefault('ticket_failed',[]):job['ticket_failed'].append(token)
+            # Permanent for this job only on authentication/quota errors. Transient
+            # failures use cost_service's 60-second circuit breaker, after success-cache lookup.
+            if any(w in str(exc) for w in ['密钥','额度','权限','429']):job['ticket_queries_paused']=True
             job['warnings'].append(message)
-    job.setdefault('ticket_checked',[]).append(token)
-    if len(job.get('ticket_checked',[]))>=15:queue.clear()
+    if token not in job.setdefault('ticket_checked',[]):job['ticket_checked'].append(token)
+    if len(set(job.get('ticket_checked',[])))>=15 and stage==4:queue.clear()
     return not queue,message+(' 尚余'+str(len(queue))+'个待核对。' if queue else '')
 
 @planning_step
@@ -179,7 +197,7 @@ def advance(job, amap_key):
             job['lodging']=lodging;job['warnings'].extend(lodging['notes'])
             if not job.get('retry_hotel_only'):
                 for field in ('ticket_queue_4','ticket_queue_5','ticket_queries_paused'):job.pop(field,None)
-                job['ticket_checked']=[];job['ticket_options']=[]
+                job['ticket_checked']=[];job['ticket_options']=[];job['ticket_failed']=[];job['ticket_attempts']={};job['ticket_reconcile_rounds']=0
             if p.get('stay_kind')=='free' or not lodging['nights']:
                 job['hotels']=[];job['hotel_search']={'skipped':True,'reason':'已选择不订酒店，住宿费为0。' if p.get('stay_kind')=='free' else '本次无需目的地住宿。'}
                 message=job['hotel_search']['reason']
@@ -236,11 +254,20 @@ def advance(job, amap_key):
             # 复用初稿的景点集合；最终重算预算、日期与真实交通时段。
             p['ticket_refs']=job.get('ticket_refs',[])
             result=build_plan(p,amap_key)
+            checked=set(job.get('ticket_checked',[]))
+            unchecked=[s['name']+'|'+d['date'] for d in result.get('days',[]) for s in d['stops'] if s['name']+'|'+d['date'] not in checked]
+            if unchecked and checked and job.get('ticket_reconcile_rounds',0)<2 and len(checked)<15:
+                job['ticket_reconcile_rounds']=job.get('ticket_reconcile_rounds',0)+1
+                job.pop('ticket_queue_5',None)
+                job.update(index=5,running=False)
+                return job
             from .joint_planner import validate_plan
             job['sightseeing_check']=validate_plan(result,p,confirmed=bool(outbound and inbound))
             result['warnings']+=job['warnings']
             result['warnings'].append('报价来自有限查询结果；不是全网最低价或库存保证。市内交通、住宿和未确认门票仍为预算估算。')
             result['warnings'].append('每天景点安排已为去程抵达、返程候车预留时间；酒店、车站和景点接驳时间为估计，具体接驳路线仍需核对。')
+            from .quote_coverage import coverage
+            result['quote_coverage']=coverage(job,result)
             job['plan']=result
             job['breakdown']=[{'name':'去程交通','amount':str((Decimal(outbound['unit']) if outbound else single_fallback)*p['people']),'state':'查询参考' if outbound else '估算预留'},
                               {'name':'返程交通','amount':str((Decimal(inbound['unit']) if inbound else single_fallback)*p['people']),'state':'查询参考' if inbound else '估算预留'},

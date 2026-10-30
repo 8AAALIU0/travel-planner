@@ -23,7 +23,8 @@ def ticket(name='二球观光成人票', price='209'):
 
 class CostsTests(TestCase):
     def test_existing_pages_and_new_links(self):
-        for url in ('/','/plan/','/costs/'):
+        self.assertRedirects(self.client.get('/'), '/journey/', fetch_redirect_response=False)
+        for url in ('/explore/','/plan/','/costs/'):
             r=self.client.get(url)
             self.assertEqual(r.status_code,200)
             self.assertContains(r,'费用查询与预算')

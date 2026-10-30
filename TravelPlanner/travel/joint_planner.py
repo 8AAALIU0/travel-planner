@@ -4,7 +4,7 @@ from datetime import timedelta
 from decimal import Decimal
 from .transport_policy import timestamp,deduplicate,budget_limit,score_values,reason,PRIORITIES
 from .planner_service import day_window,fetch_pool,enrich
-from .itinerary_optimizer import search
+from .itinerary_optimizer import search,select_candidates
 
 
 def goals(p):
@@ -72,7 +72,7 @@ def select_joint(outbound,inbound,p,key,verifier=None):
             token=(item['out']['name'],item['out']['raw']['departureTime'],item['back']['name'],item['back']['raw']['departureTime'])
             if token not in seen:shortlist.append(item);seen.add(token)
     rows,_,_=fetch_pool(p['city'],p['interests'],key,keywords=p.get('keywords'))
-    candidates=enrich(rows,p)[:24]
+    candidates=select_candidates(enrich(rows,p),32)
     # 复用已有真实路线缓存；尚无缓存的边仅用于候选比较中的估算，最终会再核验。
     from .planner_api import cache_key,read_cache_many
     identifiers={}
@@ -84,7 +84,7 @@ def select_joint(outbound,inbound,p,key,verifier=None):
     cached_routes=read_cache_many(identifiers.values())
     known={edge:cached_routes[identifier] for edge,identifier in identifiers.items() if cached_routes.get(identifier)}
     for item in shortlist:
-        q=item['p'];state,_=search(candidates,q,max(Decimal(0),remaining(q)),known=known,width=16)
+        q=item['p'];state,_=search(candidates,q,max(Decimal(0),remaining(q)),known=known,width=24)
         item['evaluation']=snapshot(state,q)
         if remaining(q)<0:item['evaluation'].update(met=False,stop_count=0,play_days=0,counts=[0]*p['days'],counts_text=' / '.join(['0']*p['days']))
     for score,item in zip(score_values([(float(i['fare']),i['travel'],i['loss']) for i in shortlist],priority),shortlist):item['score']=score
