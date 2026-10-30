@@ -1,6 +1,7 @@
 """途牛只读查询。价格字段按官方文档；不提供下单入口。"""
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -11,6 +12,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from django.conf import settings
+from django.core.cache import cache
 from django.utils import timezone
 from .planner_api import cache_key, read_cache, write_cache
 
@@ -18,6 +20,7 @@ TOOLS = {'ticket': 'query_cheapest_tickets', 'hotel': 'tuniuHotelSearch',
          'train': 'searchLowestPriceTrain', 'flight': 'searchLowestPriceFlight'}
 _lock = threading.Lock()
 _last_call = 0.0
+log = logging.getLogger(__name__)
 
 
 class QuoteError(Exception):
@@ -112,7 +115,32 @@ def decode_result(text):
     raise QuoteError('平台返回结构暂不能识别。')
 
 
-def run_query(kind, args):
+def _connection_key(kind):
+    fingerprint = hashlib.sha256(os.environ.get('TUNIU_API_KEY', '').strip().encode()).hexdigest()
+    return 'travel-provider-connection:' + kind + ':' + fingerprint
+
+
+def run_query(kind, args, wait_for_slot=False):
+    started = time.monotonic()
+    outcome = 'error'
+    try:
+        result = _run_query(kind, args, wait_for_slot=wait_for_slot)
+        outcome = 'cache' if result[1] else 'provider'
+        if not result[1]:
+            cache.delete(_connection_key(kind))
+        return result
+    except QuoteError as exc:
+        # Only connection failures/timeouts pause a service. Empty inventory,
+        # malformed data, and errors for another service must not block it.
+        if ('错误码 101' in str(exc) or '平台查询超时' in str(exc)):
+            cache.set(_connection_key(kind), True, timeout=60)
+        raise
+    finally:
+        log.warning('TRAVEL-TIMING provider=%s outcome=%s seconds=%.3f',
+                    kind if kind in TOOLS else 'unknown', outcome, time.monotonic() - started)
+
+
+def _run_query(kind, args, wait_for_slot=False):
     global _last_call
     if kind not in TOOLS:
         raise QuoteError('不支持该查询。')
@@ -124,9 +152,14 @@ def run_query(kind, args):
     cached = read_cache(identifier)
     if cached is not None:
         return cached, True
+    if cache.get(_connection_key(kind)):
+        raise QuoteError('该类途牛接口连接暂不可用，已暂停重复请求约1分钟；已有有效缓存仍可用，请稍后重试。本项未取得新报价。')
     with _lock:
-        if time.monotonic() - _last_call < 13:
-            raise QuoteError('请间隔至少13秒再查另一项，避免触发平台频率限制。相同查询可使用缓存。')
+        wait = 13 - (time.monotonic() - _last_call)
+        if wait > 0:
+            if not wait_for_slot:
+                raise QuoteError('请间隔至少13秒再查另一项，避免触发平台频率限制。相同查询可使用缓存。')
+            time.sleep(wait + .05)
         _last_call = time.monotonic()
     env = os.environ.copy()
     env.update(TUNIU_API_KEY=key, TUNIU_AUTH_TYPE='apiKey', NO_COLOR='1')
@@ -145,6 +178,8 @@ def run_query(kind, args):
             raise QuoteError('密钥验证失败，请使用当前有效的途牛 API Key 重新启动网站。')
         if '429' in combined or 'ratelimit' in combined:
             raise QuoteError('平台调用频率或额度限制，请稍后再试。')
+        if reply.returncode == 101:
+            raise QuoteError('错误码 101；无法连接途牛服务器，本项未取得报价。')
         try:
             decode_result(text)
         except QuoteError as exc:

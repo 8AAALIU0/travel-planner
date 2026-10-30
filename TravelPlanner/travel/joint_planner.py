@@ -74,14 +74,15 @@ def select_joint(outbound,inbound,p,key,verifier=None):
     rows,_,_=fetch_pool(p['city'],p['interests'],key,keywords=p.get('keywords'))
     candidates=enrich(rows,p)[:24]
     # 复用已有真实路线缓存；尚无缓存的边仅用于候选比较中的估算，最终会再核验。
-    from .planner_api import cache_key,read_cache
-    known={}
+    from .planner_api import cache_key,read_cache_many
+    identifiers={}
     for a in candidates:
         for b in candidates:
             if a['poi_id']==b['poi_id']:continue
             identifier=cache_key('route-v8',[f"{a['longitude']:.6f},{a['latitude']:.6f}",f"{b['longitude']:.6f},{b['latitude']:.6f}",p['mode'],p['city']])
-            cached=read_cache(identifier)
-            if cached:known[(a['poi_id'],b['poi_id'])]=cached
+            identifiers[(a['poi_id'],b['poi_id'])]=identifier
+    cached_routes=read_cache_many(identifiers.values())
+    known={edge:cached_routes[identifier] for edge,identifier in identifiers.items() if cached_routes.get(identifier)}
     for item in shortlist:
         q=item['p'];state,_=search(candidates,q,max(Decimal(0),remaining(q)),known=known,width=16)
         item['evaluation']=snapshot(state,q)

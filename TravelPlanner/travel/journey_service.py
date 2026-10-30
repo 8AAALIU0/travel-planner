@@ -7,6 +7,7 @@ from django.utils import timezone
 from . import cost_service
 from .cost_service import QuoteError, money, seat_count
 from .planner_service import build_plan
+from .query_runtime import planning_step
 
 STAGES=['寻找符合兴趣的景点并安排初稿','查询去程交通','查询返程交通','按住宿需求筛选酒店','逐个核对行程中的门票','重排并补核新增景点门票','合并路线、时段与全部费用']
 
@@ -33,9 +34,8 @@ def initial_job(values):
 
 def query(kind,args):
     # 自动流程自行遵守调用间隔，不要求用户手动等待再点下一项。
-    wait=13-(time.monotonic()-cost_service._last_call)
-    if wait>0:time.sleep(min(wait+.05,13.1))
-    record,_=cost_service.run_query(kind,args)
+    # Cache and connection protection are checked before reserving an API slot.
+    record,_=cost_service.run_query(kind,args,wait_for_slot=True)
     return record
 
 
@@ -117,12 +117,13 @@ def ticket_stage(job,p,key,stage):
             else:message=target['name']+'：未取得匹配日期和身份的成人票，使用分类估算。'
         except QuoteError as exc:
             message=target['name']+'：'+str(exc)+'；使用分类估算。'
-            if any(w in str(exc) for w in ['密钥','额度','频率','权限','429']):job['ticket_queries_paused']=True
+            if any(w in str(exc) for w in ['密钥','额度','频率','权限','429','错误码 101','连接暂不可用','平台查询超时']):job['ticket_queries_paused']=True
             job['warnings'].append(message)
     job.setdefault('ticket_checked',[]).append(token)
     if len(job.get('ticket_checked',[]))>=15:queue.clear()
     return not queue,message+(' 尚余'+str(len(queue))+'个待核对。' if queue else '')
 
+@planning_step
 def advance(job, amap_key):
     job=copy.deepcopy(job)
     stage=job['index'];p=restore(job['input']);message=''

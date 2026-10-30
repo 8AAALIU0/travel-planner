@@ -21,6 +21,16 @@ def read_cache(identifier):
     return item.payload if item else None
 
 
+def read_cache_many(identifiers):
+    """Fetch the whole candidate route matrix in one database round trip."""
+    identifiers = list(set(identifiers))
+    if not identifiers:
+        return {}
+    return dict(PlannerCache.objects.filter(
+        cache_key__in=identifiers, expires_at__gt=timezone.now()
+    ).values_list('cache_key', 'payload'))
+
+
 def write_cache(identifier, payload, hours=6):
     PlannerCache.objects.update_or_create(cache_key=identifier, defaults={"payload": payload, "expires_at": timezone.now() + timedelta(hours=hours)})
 

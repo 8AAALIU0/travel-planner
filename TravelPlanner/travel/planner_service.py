@@ -12,6 +12,7 @@ from .collect_service import canonical_city, preview_rows, import_rows
 from .models import AmapRecord
 from .planner_forms import INTERESTS
 from .planner_api import search_places, read_cache, write_cache, cache_key, route_between
+from .query_runtime import step_memo
 
 KEYWORDS = {"nature": "公园", "culture": "历史文化", "museum": "博物馆", "city": "步行街"}
 INTEREST_WORDS = {"nature": ("公园", "山", "湖", "湿地", "森林", "自然"), "culture": ("历史", "文化", "古", "寺", "故居", "遗址", "文物"), "museum": ("博物馆", "纪念馆", "美术馆"), "city": ("步行街", "商业街", "街区", "广场")}
@@ -35,6 +36,7 @@ def distance(a, b):
     return 6371 * 2 * math.asin(min(1, math.sqrt(h)))
 
 
+@step_memo
 def fetch_pool(city, interests, key, keywords=None):
     aliases={"自然风光":"公园", "历史文化":"历史文化", "城市漫步":"步行街", "亲子":"游乐园", "拍照":"景区", "美食":"特色街区", "休闲":"公园"}
     queries = list(dict.fromkeys(aliases.get(w,w) for w in keywords)) if keywords else list(dict.fromkeys(KEYWORDS[i] for i in interests))
@@ -86,8 +88,13 @@ def fetch_pool(city, interests, key, keywords=None):
                 unique[row["poi_id"]] = dict(row)
     candidates = list(unique.values())
     # 自动保存通过基础筛选的接口资料；不要求用户打开采集页。
-    for offset in range(0, len(candidates), 25):
-        batch = candidates[offset:offset+25]
+    stored_stamps = dict(AmapRecord.objects.filter(
+        poi_id__in=[row['poi_id'] for row in candidates]
+    ).values_list('poi_id', 'fetched_at'))
+    pending_save = [row for row in candidates if row['poi_id'] not in stored_stamps
+                    or parse_datetime(row['fetched_at']) > stored_stamps[row['poi_id']]]
+    for offset in range(0, len(pending_save), 25):
+        batch = pending_save[offset:offset+25]
         stamp = timezone.now().isoformat()
         # 每行保留原始获取时间，避免把缓存时间伪装成新请求时间。
         grouped = {}
