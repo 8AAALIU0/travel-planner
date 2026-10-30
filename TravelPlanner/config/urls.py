@@ -16,14 +16,14 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
+from django.views.generic import RedirectView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
 ]
 
-# TRAVEL_HOME_V1
-from travel.views import home
-urlpatterns.insert(0, path("", home, name="travel_home"))
+# The public homepage opens the complete journey planner.
+urlpatterns.insert(0, path("", RedirectView.as_view(pattern_name="travel_journey", permanent=False), name="site_home"))
 
 # TRAVEL_DATA_V2
 from travel.views import detail
@@ -32,7 +32,7 @@ urlpatterns.insert(0, path("attractions/<int:pk>/", detail, name="attraction_det
 
 # TRAVEL_COLLECT_V4
 from travel.collect_views import catalog, collect
-urlpatterns.insert(0, path("", catalog, name="travel_home"))
+urlpatterns.insert(0, path("explore/", catalog, name="travel_home"))
 urlpatterns.append(path("collect/", collect, name="travel_collect"))
 
 
