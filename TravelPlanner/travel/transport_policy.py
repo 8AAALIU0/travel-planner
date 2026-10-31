@@ -13,27 +13,31 @@ def timestamp(value):
     except (ValueError,TypeError):return None
 
 
-def prepare(record,people,leg,allow_overnight=True,max_hours=None,seat_preference='any'):
-    result=[]
+def evaluate_transport(record,people,leg,allow_overnight=True,max_hours=None,seat_preference='any'):
+    result=[];rejections={}
+    def reject(code):rejections[code]=rejections.get(code,0)+1
     for source in record['rows']:
-        if not source.get('usable') or money(source.get('unit')) is None:continue
+        if money(source.get('unit')) is None:reject('价格缺失');continue
         raw=source['raw'];dep=timestamp(raw.get('departureTime'));arr=timestamp(raw.get('arrivalTime'))
-        if not dep or not arr or dep.date().isoformat()!=record['args']['departureDate']:continue
+        if not dep or not arr:reject('时刻缺失或格式不明');continue
+        if dep.date().isoformat()!=record['args']['departureDate']:reject('日期不符');continue
         try:duration=(arr-dep).total_seconds()/60
-        except TypeError:continue
-        if not 0<duration<=72*60:continue
+        except TypeError:reject('时区不一致');continue
+        if not 0<duration<=72*60:reject('到达早于出发或时长异常');continue
         night=arr.date()>dep.date()
-        if not allow_overnight and night:continue
-        if max_hours and duration>float(max_hours)*60:continue
+        if not allow_overnight and night:reject('不接受跨夜');continue
+        if max_hours and duration>float(max_hours)*60:reject('超过时长上限');continue
         if record['kind']=='train':
             label=source['name'].split(' · ')[-1]
-            if label=='无座':continue
-            if seat_preference=='sleeper' and '卧' not in label:continue
-            if seat_preference=='second' and label!='二等座':continue
-            if seat_preference=='ordinary' and label not in ('硬座','软座','硬卧','软卧','二等卧','动卧'):continue
+            if label=='无座':reject('无座');continue
+            if seat_preference=='sleeper' and '卧' not in label:reject('座席偏好不符');continue
+            if seat_preference=='second' and label!='二等座':reject('座席偏好不符');continue
+            if seat_preference=='ordinary' and label not in ('硬座','软座','硬卧','软卧','二等卧','动卧'):reject('座席偏好不符');continue
             count=seat_count((raw.get('seatAvailable') or {}).get(SEATS.get(label,'')+'Num'))
         else:count=seat_count(raw.get('remainingSeats'))
-        if count is None or count<people:continue
+        if count is None:reject('余票数量未知');continue
+        if count<people:reject('余票少于同行人数');continue
+        if not source.get('usable'):reject('平台标记不可用');continue
         row=copy.deepcopy(source)
         arrival_minute=arr.hour*60+arr.minute;dep_minute=dep.hour*60+dep.minute
         loss=(arr.date()-dep.date()).days*1440+max(0,arrival_minute-9*60) if leg=='outbound' else max(0,18*60-dep_minute)+(360 if night else 0)
@@ -41,7 +45,20 @@ def prepare(record,people,leg,allow_overnight=True,max_hours=None,seat_preferenc
                    door_minutes=round(duration)+(300 if record['kind']=='flight' else 180),play_loss=loss,overnight=night,
                    duration_text=f'{int(duration//60)}小时{int(duration%60)}分',overnight_label='跨夜抵达' if night else '当天抵达')
         result.append(row)
-    return result
+    return result,rejections
+
+
+def prepare(record,people,leg,allow_overnight=True,max_hours=None,seat_preference='any'):
+    return evaluate_transport(record,people,leg,allow_overnight,max_hours,seat_preference)[0]
+
+
+def compatible_pair(out,back):
+    if not out or not back:return False
+    arrive=timestamp(out.get('raw',{}).get('arrivalTime'));leave=timestamp(back.get('raw',{}).get('departureTime'))
+    if not arrive or not leave:return False
+    try:gap=(leave-arrive).total_seconds()/60
+    except TypeError:return False
+    return gap>=(300 if 'flight' in (out.get('transport_kind'),back.get('transport_kind')) else 180)
 
 
 def deduplicate(rows):
@@ -173,11 +190,11 @@ def gather(p,leg,args,query_callable):
             if kind=='train':params['searchType']=order
             try:
                 record=query_callable(kind,params)
-                found=prepare(record,p['people'],leg,p.get('allow_overnight',True),p.get('max_travel_hours'),p.get('seat_preference') or 'any')
+                found,rejections=evaluate_transport(record,p['people'],leg,p.get('allow_overnight',True),p.get('max_travel_hours'),p.get('seat_preference') or 'any')
                 pool.extend(found)
                 if kind=='train' and len(sorts)==1 and (not found or all(Decimal(r['unit'])>budget_limit(p) for r in found)):
                     sorts.append('3' if order=='5' else '5')
-                reports.append({'kind':kind,'args':params,'rows':len(record['rows']),'accepted':len(found),'queried_at':record['queried_at']})
+                reports.append({'kind':kind,'args':params,'rows':len(record['rows']),'accepted':len(found),'rejections':rejections,'queried_at':record['queried_at']})
             except QuoteError as exc:
                 errors.append(str(exc));reports.append({'kind':kind,'args':params,'error':str(exc)})
                 if any(word in str(exc) for word in ('额度','429','密钥验证','频率')):break

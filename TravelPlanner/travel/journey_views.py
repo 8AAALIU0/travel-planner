@@ -108,6 +108,7 @@ def retry_transport(request):
     else:
         job.update(index=1,running=False,done=False,failed=False,prices={},warnings=[],retry_transport_only=True,
                    steps=[{'name':'保留原有景点和住宿','message':'仅重新查询往返交通，之后更新时段和预算。'}])
+        job.pop('transport_pair_unresolved',None)
         job.pop('transport_diagnostics',None)
         job.pop('transport_pools',None)
         job.pop('transport_options',None)
@@ -191,7 +192,7 @@ def transport_preferences(request):
     job['input'].update(form.cleaned_data)
     job.update(index=1,running=False,done=False,failed=False,prices={},warnings=[],retry_transport_only=True,
                steps=[{'name':'更新交通偏好','message':'保留原有城市、住宿和票种资料，重新比较往返交通并重排景点。'}])
-    for key in ('transport_diagnostics','transport_pools','transport_options','joint_comparison','sightseeing_check'):job.pop(key,None)
+    for key in ('transport_diagnostics','transport_pools','transport_options','joint_comparison','sightseeing_check','transport_pair_unresolved'):job.pop(key,None)
     item.payload=job;item.save(update_fields=['payload'])
     return redirect('travel_journey')
 
@@ -230,6 +231,7 @@ def select_transport(request):
             messages.error(request,'这组往返费用超出设定的交通预算占比，请修改偏好或选择其他候选。');return redirect('travel_journey')
     p=restore(job['input'])
     old_lodging=job.get('lodging') or lodging_window(job,p)
+    job.pop('transport_pair_unresolved',None)
     job['prices']=prices
     job.pop('joint_comparison',None)
     job.pop('sightseeing_check',None)

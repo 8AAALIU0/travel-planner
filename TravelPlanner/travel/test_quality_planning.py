@@ -30,8 +30,9 @@ class QualityPlanningTests(TestCase):
 
     def test_small_case_agrees_with_exhaustive_oracle(self):
         p,candidates=self.candidates([10,20,30,40])
-        state,_=search(candidates,p,Decimal(60))
-        state,attempts=improve(state,candidates,p,Decimal(60),{}, {},max_evaluations=150)
+        known={(a['poi_id'],b['poi_id']):route() for a in candidates for b in candidates if a!=b}
+        state,_=search(candidates,p,Decimal(60),known=known)
+        state,attempts=improve(state,candidates,p,Decimal(60),known, {},max_evaluations=150)
         # Independent brute force for this constant-duration, complete tiny graph.
         feasible=[pair for pair in permutations(range(4),2) if sum(int(candidates[i]['ticket_per_person']) for i in pair)<=60]
         expected=max(sum(int(candidates[i]['ticket_per_person']) for i in pair) for pair in feasible)
@@ -151,8 +152,8 @@ class QualityPlanningTests(TestCase):
                     cost=sum(costs[i] for i in order)
                     if cost<=budget:options.append((206.5+5*sum(scores[i] for i in order),cost))
                 best_quality=max(q for q,c in options)
-                expected_spend=max(c for q,c in options if q>=best_quality*.97)
+                expected_spend=max(c for q,c in options if q>=best_quality-1e-8)
                 state,_=search(candidates,p,Decimal(budget),known=known)
                 state,_=improve(state,candidates,p,Decimal(budget),known,{},max_evaluations=200)
                 self.assertEqual(state.cost,expected_spend*100)
-                self.assertGreaterEqual(state.utility,best_quality*.97)
+                self.assertGreaterEqual(state.utility,best_quality-1e-8)

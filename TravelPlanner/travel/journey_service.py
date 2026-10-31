@@ -187,9 +187,13 @@ def advance(job, amap_key):
                         out,back,warning=choose_pair(pools['outbound'],pools['inbound'],p)
                         warning+=' 景点联合比较未完成：'+str(exc)+'；本次不能保证游玩目标。'
                         job['joint_comparison']={'error':'景点资料查询未完成，尚未验证游玩目标。'}
-                    if out and back:job['prices'].update(outbound=out,inbound=back)
+                    if out and back:
+                        job['prices'].update(outbound=out,inbound=back)
+                        job.pop('transport_pair_unresolved',None)
                     else:
-                        job['prices'].pop('outbound',None);job['prices'].pop('inbound',None)
+                        # Failed combination selection must not erase successful one-way query evidence.
+                        job['transport_pair_unresolved']=True
+                        job['warnings'].append('往返组合未确认；保留已查到的单程参考，不能据此确认完整往返安排。')
                     if warning:job['warnings'].append(warning)
                 job['transport_options']={legname:alternatives(items,job['prices'].get(legname),cap=budget_limit(p)) for legname,items in pools.items()}
         elif stage==3:
@@ -262,10 +266,13 @@ def advance(job, amap_key):
                 job.update(index=5,running=False)
                 return job
             from .joint_planner import validate_plan
-            job['sightseeing_check']=validate_plan(result,p,confirmed=bool(outbound and inbound))
+            job['sightseeing_check']=validate_plan(result,p,confirmed=bool(outbound and inbound) and not job.get('transport_pair_unresolved',False))
             result['warnings']+=job['warnings']
             result['warnings'].append('报价来自有限查询结果；不是全网最低价或库存保证。市内交通、住宿和未确认门票仍为预算估算。')
             result['warnings'].append('每天景点安排已为去程抵达、返程候车预留时间；酒店、车站和景点接驳时间为估计，具体接驳路线仍需核对。')
+            from .plan_audit import audit_plan
+            result['audit']=audit_plan(job,result,p)
+            result['warnings'].extend(result['audit']['messages'])
             from .quote_coverage import coverage
             result['quote_coverage']=coverage(job,result)
             job['plan']=result

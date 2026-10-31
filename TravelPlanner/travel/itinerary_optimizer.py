@@ -76,9 +76,9 @@ def select_candidates(candidates,limit=32):
 
 
 def choose_state(states,p,min_stops=0,min_days=0):
-    """Epsilon constraint: within 3% of best found quality, prefer sourced ticket value.
+    """Epsilon constraint: at best found quality, prefer sourced ticket value.
 
-    The 3% allowance is our product policy, not a guarantee from a published algorithm.
+    Budget use must never lower the achieved quality score.
     Unknown estimates never earn budget-utilization reward.
     """
     best=max(states,key=lambda s:rank(s,min_stops,min_days))
@@ -87,7 +87,7 @@ def choose_state(states,p,min_stops=0,min_days=0):
     count=sum(map(len,best.days))+len(best.current)
     feasible=[s for s in states if rank(s,min_stops,min_days)[:2]==target
               and sum(map(len,s.days))+len(s.current)>=count
-              and s.utility>=best.utility-.03*abs(best.utility)]
+              and s.utility>=best.utility-1e-8]
     return max(feasible,key=lambda s:(s.reference_spend,s.utility,-s.travel,-s.cost))
 
 
@@ -100,6 +100,7 @@ def prune(states,width,min_stops=0,min_days=0):
         if key not in best or rank(s,min_stops,min_days)>rank(best[key],min_stops,min_days):best[key]=s
     ordered=sorted(best.values(),key=lambda s:rank(s,min_stops,min_days),reverse=True)
     if len(ordered)<=width:return ordered
+    if width<=1:return ordered[:1]
     # Reserve one quarter of the beam for varied cost/theme states; avoid exhausting the budget on day one.
     kept=ordered[:max(1,width*3//4)]
     identities={id(s) for s in kept};buckets=set()
@@ -243,6 +244,7 @@ def optimize(candidates,p,ticket_budget,key,route_function,candidate_limit=32,wi
     known={};errors={};queried=set();used_requests=0
     state=None;metrics=[];rounds=0;was_slow=False
     local_evaluations=0
+    solver_reports=[]
     context=prepare_search(selected,p)
     identifiers={edge_key(a,b):cache_key('route-v8',[f"{a['longitude']:.6f},{a['latitude']:.6f}",f"{b['longitude']:.6f},{b['latitude']:.6f}",p['mode'],p['city']])
                  for a in selected for b in selected if a['poi_id']!=b['poi_id']}
@@ -281,6 +283,10 @@ def optimize(candidates,p,ticket_budget,key,route_function,candidate_limit=32,wi
         if rounds==1:
             state,attempts=improve(state,selected,p,ticket_budget,known,errors,closed=used_requests>=request_limit,max_evaluations=600)
             local_evaluations+=attempts
+        if rounds==1:
+            from .path_solver import solve_paths
+            state,solver_report=solve_paths(selected,p,ticket_budget,known,errors,used_requests>=request_limit,state)
+            solver_reports.append(solver_report)
         pairs={edge_key(a,b):(a,b) for path in state.days for a,b in zip(path,path[1:])}
         pending=[]
         for pair,(a,b) in pairs.items():
@@ -303,6 +309,9 @@ def optimize(candidates,p,ticket_budget,key,route_function,candidate_limit=32,wi
     state,metrics=search(selected,p,ticket_budget,known,errors,closed=True,width=width,context=context)
     state,attempts=improve(state,selected,p,ticket_budget,known,errors,closed=True,max_evaluations=600)
     local_evaluations+=attempts
+    from .path_solver import solve_paths
+    state,solver_report=solve_paths(selected,p,ticket_budget,known,errors,True,state)
+    solver_reports.append(solver_report)
     days=[];verified=unverified=0
     for index,path in enumerate(state.days):
         start,end=day_window(p,index)
@@ -321,6 +330,6 @@ def optimize(candidates,p,ticket_budget,key,route_function,candidate_limit=32,wi
                      'available_end':time_text(max(0,end)),'available_text':('在途或返程预留，本日没有可用游玩时段' if start>=end else time_text(start)+'—'+time_text(end)),'available_minutes':max(0,end-start),'schedule_reason':reason,
                      'target':2 if p['pace']=='relaxed' else 3,'travel_minutes':sum(s['leg']['minutes'] for s in stops if s.get('leg'))})
     return {'days':days,'verified_legs':verified,'unverified_legs':unverified,'slow_repaired':was_slow,
-            'optimizer':{'method':'TOPTW预算与时间窗模型：多样性束搜索＋插入/替换/换序局部改进＋真实路线核验','beam_width':width,'local_evaluations':local_evaluations,'budget_strategy':p.get('budget_strategy','quality'),'quality_tolerance_pct':3 if p.get('budget_strategy')=='experience' else 0,
+            'optimizer':{'method':'日路径整数规划（PuLP/CBC）＋时间窗核验＋真实路线反馈','solver_reports':solver_reports,'beam_width':width,'local_evaluations':local_evaluations,'budget_strategy':p.get('budget_strategy','quality'),'quality_tolerance_pct':0,
              'considered_candidates':len(selected),'available_candidates':len(candidates),'route_requests':used_requests,'rounds':rounds,
              'objective_score':round(state.utility,2),'guarantee':'有界候选与搜索范围内的可行方案，不保证全局最优'}}
